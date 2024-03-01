@@ -31,25 +31,7 @@ type FnType = dyn FnOnce() + Send + 'static;
 
 /// A FriendlyPool is a threadpool that collaborates with its users to not overcommit the CPU.
 ///
-/// This leads to improved latency of workloads due to less contention over the physical resources.
-///
-/// # Example
-///
-/// ```rust
-/// use std::time::Duration;
-/// use friendlypool::FriendlyPool;
-///
-/// let pool1 = FriendlyPool::default();
-/// let pool2 = FriendlyPool::default();
-///
-/// for _ in 0..20 {
-///     pool1.execute(move || std::thread::sleep(Duration::from_secs(1)));
-///     pool2.execute(move || std::thread::sleep(Duration::from_secs(1)));
-/// }
-///
-/// pool1.shutdown();
-/// pool2.shutdown();
-/// ```
+/// This leads to improved latency of CPU-bound workloads due to less contention over the physical resources.
 pub struct FriendlyPool {
     /// Sender to send work to the workers.
     work_channnel_sender: crossbeam_channel::Sender<Box<FnType>>,
@@ -139,6 +121,9 @@ impl FriendlyPool {
                 let mut current_cores = c.load(std::sync::atomic::Ordering::Relaxed);
                 loop {
                     if sd.load(std::sync::atomic::Ordering::Relaxed) {
+                        for thread in thread_handles.iter() {
+                            thread.thread().unpark()
+                        }
                         break;
                     }
                     let new_p_usage = process_usage();
@@ -255,5 +240,33 @@ impl FriendlyPool {
     /// Get the maximum number of threads that the pool wants to use right now.
     pub fn active_count(&self) -> usize {
         self.cores_to_use.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn basic() {
+        let pool1 = FriendlyPool::default();
+
+        fn fib(n: u32) -> u32 {
+            if n < 2 {
+                1
+            } else {
+                fib(n - 1) + fib(n - 2)
+            }
+        }
+
+        for i in 0..20 {
+            println!("pool1 {i} {} {}", pool1.active_count(), pool1.max_count());
+            pool1.execute(move || {
+                fib(30);
+            });
+        }
+        println!("shutdown");
+
+        pool1.shutdown();
     }
 }
