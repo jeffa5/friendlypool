@@ -29,6 +29,27 @@ fn process_usage() -> u64 {
 
 type FnType = dyn FnOnce() + Send + 'static;
 
+/// A FriendlyPool is a threadpool that collaborates with its users to not overcommit the CPU.
+///
+/// This leads to improved latency of workloads due to less contention over the physical resources.
+///
+/// # Example
+///
+/// ```rust
+/// use std::time::Duration;
+/// use friendlypool::FriendlyPool;
+///
+/// let pool1 = FriendlyPool::default();
+/// let pool2 = FriendlyPool::default();
+///
+/// for _ in 0..20 {
+///     pool1.execute(move || std::thread::sleep(Duration::from_secs(1)));
+///     pool2.execute(move || std::thread::sleep(Duration::from_secs(1)));
+/// }
+///
+/// pool1.shutdown();
+/// pool2.shutdown();
+/// ```
 pub struct FriendlyPool {
     /// Sender to send work to the workers.
     work_channnel_sender: crossbeam_channel::Sender<Box<FnType>>,
@@ -76,6 +97,7 @@ impl Default for FriendlyPoolOptions {
 
 impl FriendlyPool {
     /// Create a new friendlypool with the given options.
+    ///
     pub fn new(opts: FriendlyPoolOptions) -> Self {
         let (sender, receiver) = crossbeam_channel::bounded(0);
         let capacity = num_cpus::get();
@@ -155,7 +177,7 @@ impl FriendlyPool {
         s
     }
 
-    fn spawn(&mut self, index: usize) -> JoinHandle<()> {
+    fn spawn(&self, index: usize) -> JoinHandle<()> {
         // spawn another thread
         let receiver = self.work_channnel_receiver.clone();
         let cores_to_use = Arc::clone(&self.cores_to_use);
@@ -190,7 +212,7 @@ impl FriendlyPool {
     /// Execute a function on the threadpool.
     ///
     /// Blocks until a worker thread can take it.
-    pub fn execute<F>(&mut self, f: F)
+    pub fn execute<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'static,
     {
