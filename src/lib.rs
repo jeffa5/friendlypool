@@ -3,7 +3,7 @@ use std::{
         atomic::{AtomicBool, AtomicUsize},
         Arc,
     },
-    thread::{self, sleep, spawn, JoinHandle},
+    thread::{self, sleep, JoinHandle},
     time::Duration,
 };
 
@@ -44,6 +44,8 @@ pub struct FriendlyPool {
     rescale_period: Duration,
     /// Coordinate a shutdown or not yet.
     shutdown: Arc<AtomicBool>,
+    /// Base name to use for threads.
+    name: String,
 }
 
 impl Default for FriendlyPool {
@@ -56,6 +58,7 @@ impl Default for FriendlyPool {
 pub struct FriendlyPoolOptions {
     pub rescale_period: Duration,
     pub overcommit_factor: f64,
+    pub name: String,
 }
 
 impl Default for FriendlyPoolOptions {
@@ -66,6 +69,7 @@ impl Default for FriendlyPoolOptions {
         Self {
             rescale_period: Duration::from_millis(period_ms as u64),
             overcommit_factor: 1.0,
+            name: "friendlypool".to_owned(),
         }
     }
 }
@@ -92,6 +96,7 @@ impl FriendlyPool {
             rescale_period,
             shutdown,
             control_thread: None,
+            name: opts.name,
         };
 
         let mut thread_handles = Vec::with_capacity(capacity);
@@ -100,46 +105,49 @@ impl FriendlyPool {
         }
         let overcommit_factor = opts.overcommit_factor;
 
-        let control_thread = spawn(move || {
-            let mut c_usage = 0;
-            let mut p_usage = 0;
-            let mut current_cores = c.load(std::sync::atomic::Ordering::Relaxed);
-            loop {
-                if sd.load(std::sync::atomic::Ordering::Relaxed) {
-                    break;
-                }
-                let new_p_usage = process_usage();
-                let new_c_usage = cpu_usage();
-                let cpu_diff = new_c_usage - c_usage;
-                let proc_diff = new_p_usage - p_usage;
-                // avoid div by 0
-                if cpu_diff > 0 {
-                    let cpu_portion = proc_diff as f64 / cpu_diff as f64;
-                    let cores = capacity as f64 * cpu_portion;
-                    let cores = cores * overcommit_factor;
-                    let cores = cores.ceil() as usize;
-                    let cores = if cores == 0 { 1 } else { cores };
-                    // println!(
-                    //     "cpu diff {}, proc diff {}, portion {}, cores {}",
-                    //     cpu_diff, proc_diff, cpu_portion, cores,
-                    // );
-                    // only store the new value if it will be different
-                    if cores != current_cores {
-                        c.store(cores, std::sync::atomic::Ordering::Relaxed);
-                        current_cores = cores;
-                        let unparked = ut.load(std::sync::atomic::Ordering::Relaxed);
-                        for thread in thread_handles.iter().take(current_cores).skip(unparked) {
-                            thread.thread().unpark()
+        let control_thread = std::thread::Builder::new()
+            .name(format!("{}-control", s.name))
+            .spawn(move || {
+                let mut c_usage = 0;
+                let mut p_usage = 0;
+                let mut current_cores = c.load(std::sync::atomic::Ordering::Relaxed);
+                loop {
+                    if sd.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    let new_p_usage = process_usage();
+                    let new_c_usage = cpu_usage();
+                    let cpu_diff = new_c_usage - c_usage;
+                    let proc_diff = new_p_usage - p_usage;
+                    // avoid div by 0
+                    if cpu_diff > 0 {
+                        let cpu_portion = proc_diff as f64 / cpu_diff as f64;
+                        let cores = capacity as f64 * cpu_portion;
+                        let cores = cores * overcommit_factor;
+                        let cores = cores.ceil() as usize;
+                        let cores = if cores == 0 { 1 } else { cores };
+                        // println!(
+                        //     "cpu diff {}, proc diff {}, portion {}, cores {}",
+                        //     cpu_diff, proc_diff, cpu_portion, cores,
+                        // );
+                        // only store the new value if it will be different
+                        if cores != current_cores {
+                            c.store(cores, std::sync::atomic::Ordering::Relaxed);
+                            current_cores = cores;
+                            let unparked = ut.load(std::sync::atomic::Ordering::Relaxed);
+                            for thread in thread_handles.iter().take(current_cores).skip(unparked) {
+                                thread.thread().unpark()
+                            }
                         }
                     }
+                    // else no change, try again next time
+                    c_usage = new_c_usage;
+                    p_usage = new_p_usage;
+                    sleep(rescale_period);
                 }
-                // else no change, try again next time
-                c_usage = new_c_usage;
-                p_usage = new_p_usage;
-                sleep(rescale_period);
-            }
-            thread_handles
-        });
+                thread_handles
+            })
+            .unwrap();
 
         s.control_thread = Some(control_thread);
 
@@ -153,26 +161,29 @@ impl FriendlyPool {
         let ut = Arc::clone(&self.unparked_threads);
         let shutdown = Arc::clone(&self.shutdown);
         let rescale_period = self.rescale_period;
-        spawn(move || {
-            loop {
-                if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
-                    break;
+        std::thread::Builder::new()
+            .name(format!("{}-{}", self.name, index))
+            .spawn(move || {
+                loop {
+                    if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    let ctu = cores_to_use.load(std::sync::atomic::Ordering::Relaxed);
+                    if index > ctu {
+                        // don't process any items yet, try again next time
+                        ut.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                        thread::park();
+                        ut.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        continue;
+                    }
+                    let Ok(f) = receiver.recv_timeout(rescale_period) else {
+                        // try again to see if we should be running
+                        continue;
+                    };
+                    f()
                 }
-                let ctu = cores_to_use.load(std::sync::atomic::Ordering::Relaxed);
-                if index > ctu {
-                    // don't process any items yet, try again next time
-                    ut.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                    thread::park();
-                    ut.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    continue;
-                }
-                let Ok(f) = receiver.recv_timeout(rescale_period) else {
-                    // try again to see if we should be running
-                    continue;
-                };
-                f()
-            }
-        })
+            })
+            .unwrap()
     }
 
     pub fn execute<F>(&mut self, f: F)
@@ -191,6 +202,7 @@ impl FriendlyPool {
             unparked_threads: _,
             rescale_period: _,
             shutdown,
+            name: _,
         } = self;
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
         drop(work_channnel_sender);
