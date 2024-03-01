@@ -29,7 +29,7 @@ fn process_usage() -> u64 {
 
 type FnType = dyn FnOnce() + Send + 'static;
 
-pub struct CollaborativeThreadPool {
+pub struct FriendlyPool {
     /// Sender to send work to the workers.
     work_channnel_sender: crossbeam_channel::Sender<Box<FnType>>,
     /// Receiver for workers to obtain work.
@@ -46,19 +46,19 @@ pub struct CollaborativeThreadPool {
     shutdown: Arc<AtomicBool>,
 }
 
-impl Default for CollaborativeThreadPool {
+impl Default for FriendlyPool {
     fn default() -> Self {
-        Self::new(CollaborativeThreadPoolOptions::default())
+        Self::new(FriendlyPoolOptions::default())
     }
 }
 
 #[derive(Clone)]
-pub struct CollaborativeThreadPoolOptions {
+pub struct FriendlyPoolOptions {
     pub rescale_period: Duration,
     pub overcommit_factor: f64,
 }
 
-impl Default for CollaborativeThreadPoolOptions {
+impl Default for FriendlyPoolOptions {
     fn default() -> Self {
         // clock tick frequency in Hz
         let frequency = _SC_CLK_TCK;
@@ -70,8 +70,8 @@ impl Default for CollaborativeThreadPoolOptions {
     }
 }
 
-impl CollaborativeThreadPool {
-    pub fn new(opts: CollaborativeThreadPoolOptions) -> Self {
+impl FriendlyPool {
+    pub fn new(opts: FriendlyPoolOptions) -> Self {
         let (sender, receiver) = crossbeam_channel::bounded(0);
         let capacity = num_cpus::get();
         let cores_to_use = Arc::new(AtomicUsize::new(0));
