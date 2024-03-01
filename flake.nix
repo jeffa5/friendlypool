@@ -16,7 +16,6 @@
         pkgs.clippy
         pkgs.cargo
         pkgs.rustfmt
-        pkgs.crate2nix
       ];
     };
   };
