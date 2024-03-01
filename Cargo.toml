@@ -1,0 +1,9 @@
+[package]
+name = "friendlypool"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crossbeam-channel = "0.5.9"
+libc = "0.2.151"
+num_cpus = "1.16.0"
