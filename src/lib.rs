@@ -46,6 +46,12 @@ pub struct CollaborativeThreadPool {
     shutdown: Arc<AtomicBool>,
 }
 
+impl Default for CollaborativeThreadPool {
+    fn default() -> Self {
+        Self::new(CollaborativeThreadPoolOptions::default())
+    }
+}
+
 #[derive(Clone)]
 pub struct CollaborativeThreadPoolOptions {
     pub rescale_period: Duration,
