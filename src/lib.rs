@@ -75,6 +75,7 @@ impl Default for FriendlyPoolOptions {
 }
 
 impl FriendlyPool {
+    /// Create a new friendlypool with the given options.
     pub fn new(opts: FriendlyPoolOptions) -> Self {
         let (sender, receiver) = crossbeam_channel::bounded(0);
         let capacity = num_cpus::get();
@@ -186,6 +187,9 @@ impl FriendlyPool {
             .unwrap()
     }
 
+    /// Execute a function on the threadpool.
+    ///
+    /// Blocks until a worker thread can take it.
     pub fn execute<F>(&mut self, f: F)
     where
         F: FnOnce() + Send + 'static,
@@ -193,6 +197,7 @@ impl FriendlyPool {
         self.work_channnel_sender.send(Box::new(f)).unwrap();
     }
 
+    /// Stop new execution on this threadpool and wait for existing executions to finish.
     pub fn shutdown(self) {
         let Self {
             work_channnel_sender,
