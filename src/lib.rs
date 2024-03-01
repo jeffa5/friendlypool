@@ -67,6 +67,8 @@ pub struct FriendlyPool {
     shutdown: Arc<AtomicBool>,
     /// Base name to use for threads.
     name: String,
+    /// Number of threads running.
+    capacity: usize,
 }
 
 impl Default for FriendlyPool {
@@ -120,6 +122,7 @@ impl FriendlyPool {
             shutdown,
             control_thread: None,
             name: opts.name,
+            capacity,
         };
 
         let mut thread_handles = Vec::with_capacity(capacity);
@@ -230,6 +233,7 @@ impl FriendlyPool {
             rescale_period: _,
             shutdown,
             name: _,
+            capacity: _,
         } = self;
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
         drop(work_channnel_sender);
@@ -241,5 +245,10 @@ impl FriendlyPool {
                 let _ = t.join();
             }
         }
+    }
+
+    /// Get the maxiumum number of threads the pool will execute concurrently.
+    pub fn max_count(&self) -> usize {
+        self.capacity
     }
 }
