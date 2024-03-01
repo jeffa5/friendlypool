@@ -49,7 +49,6 @@ pub struct CollaborativeThreadPool {
 #[derive(Clone)]
 pub struct CollaborativeThreadPoolOptions {
     pub rescale_period: Duration,
-    pub const_extra_threads: usize,
     pub overcommit_factor: f64,
 }
 
@@ -60,7 +59,6 @@ impl Default for CollaborativeThreadPoolOptions {
         let period_ms = 1000 / frequency;
         Self {
             rescale_period: Duration::from_millis(period_ms as u64),
-            const_extra_threads: 0,
             overcommit_factor: 1.0,
         }
     }
@@ -94,7 +92,6 @@ impl CollaborativeThreadPool {
         for _ in 0..capacity {
             thread_handles.push(s.spawn(thread_handles.len()));
         }
-        let const_extra_threads = opts.const_extra_threads;
         let overcommit_factor = opts.overcommit_factor;
 
         let control_thread = spawn(move || {
@@ -116,7 +113,6 @@ impl CollaborativeThreadPool {
                     let cores = cores * overcommit_factor;
                     let cores = cores.ceil() as usize;
                     let cores = if cores == 0 { 1 } else { cores };
-                    let cores = cores + const_extra_threads;
                     // println!(
                     //     "cpu diff {}, proc diff {}, portion {}, cores {}",
                     //     cpu_diff, proc_diff, cpu_portion, cores,
@@ -173,7 +169,7 @@ impl CollaborativeThreadPool {
         })
     }
 
-    pub fn submit<F>(&mut self, f: F)
+    pub fn execute<F>(&mut self, f: F)
     where
         F: FnOnce() + Send + 'static,
     {
