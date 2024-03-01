@@ -1,5 +1,4 @@
 use std::{
-    fmt::Debug,
     sync::{
         atomic::{AtomicBool, AtomicUsize},
         Arc,
@@ -28,15 +27,15 @@ fn process_usage() -> u64 {
     user + sys
 }
 
-pub struct CollaborativeThreadPool<T, F> {
+type FnType = dyn FnOnce() + Send + 'static;
+
+pub struct CollaborativeThreadPool {
     /// Sender to send work to the workers.
-    work_channnel_sender: crossbeam_channel::Sender<T>,
+    work_channnel_sender: crossbeam_channel::Sender<Box<FnType>>,
     /// Receiver for workers to obtain work.
-    work_channnel_receiver: crossbeam_channel::Receiver<T>,
+    work_channnel_receiver: crossbeam_channel::Receiver<Box<FnType>>,
     /// Control thread handle.
     control_thread: Option<JoinHandle<Vec<JoinHandle<()>>>>,
-    /// Function that workers should execute on work items.
-    f: F,
     /// How many cores should currently be used.
     cores_to_use: Arc<AtomicUsize>,
     /// How many threads are not parked.
@@ -67,12 +66,8 @@ impl Default for CollaborativeThreadPoolOptions {
     }
 }
 
-impl<T, F> CollaborativeThreadPool<T, F>
-where
-    T: Debug + Send + 'static,
-    F: FnMut(T) + Clone + Send + 'static,
-{
-    pub fn new(opts: CollaborativeThreadPoolOptions, f: F) -> Self {
+impl CollaborativeThreadPool {
+    pub fn new(opts: CollaborativeThreadPoolOptions) -> Self {
         let (sender, receiver) = crossbeam_channel::bounded(0);
         let capacity = num_cpus::get();
         let cores_to_use = Arc::new(AtomicUsize::new(0));
@@ -88,7 +83,6 @@ where
         let mut s = Self {
             work_channnel_sender: sender,
             work_channnel_receiver: receiver,
-            f,
             cores_to_use,
             unparked_threads,
             rescale_period,
@@ -153,7 +147,6 @@ where
     fn spawn(&mut self, index: usize) -> JoinHandle<()> {
         // spawn another thread
         let receiver = self.work_channnel_receiver.clone();
-        let mut f = self.f.clone();
         let cores_to_use = Arc::clone(&self.cores_to_use);
         let ut = Arc::clone(&self.unparked_threads);
         let shutdown = Arc::clone(&self.shutdown);
@@ -171,25 +164,27 @@ where
                     ut.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     continue;
                 }
-                let Ok(msg) = receiver.recv_timeout(rescale_period) else {
+                let Ok(f) = receiver.recv_timeout(rescale_period) else {
                     // try again to see if we should be running
-                    continue
+                    continue;
                 };
-                f( msg)
+                f()
             }
         })
     }
 
-    pub fn submit(&mut self, msg: T) {
-        self.work_channnel_sender.send(msg).unwrap();
+    pub fn submit<F>(&mut self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        self.work_channnel_sender.send(Box::new(f)).unwrap();
     }
 
-pub     fn shutdown(self) {
+    pub fn shutdown(self) {
         let Self {
             work_channnel_sender,
             work_channnel_receiver,
             control_thread,
-            f: _,
             cores_to_use: _,
             unparked_threads: _,
             rescale_period: _,
