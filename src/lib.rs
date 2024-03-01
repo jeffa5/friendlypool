@@ -251,4 +251,9 @@ impl FriendlyPool {
     pub fn max_count(&self) -> usize {
         self.capacity
     }
+
+    /// Get the maximum number of threads that the pool wants to use right now.
+    pub fn active_count(&self) -> usize {
+        self.cores_to_use.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
